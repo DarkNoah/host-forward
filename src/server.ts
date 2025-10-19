@@ -81,7 +81,8 @@ function resolveTargetFromRequest(req: http.IncomingMessage): string | null {
   // 1) 允许完整URL直通：当path以 http:// 或 https:// 或 ws:// 或 wss:// 开头时
   const host = req.headers.host || "";
   const url = new URL(req.url || "/", `http://${host}`);
-  const rawPath = decodeURIComponent(url.pathname + (url.search || ""));
+  // 保留原始编码，避免对中文等字符过早解码造成 "unescaped characters"
+  const rawPath = url.pathname + (url.search || "");
 
   // 去掉开头的斜杠
   const trimmed = rawPath.startsWith("/") ? rawPath.slice(1) : rawPath;
@@ -172,31 +173,58 @@ async function handleHttpRequest(
   }
   // 不再限制请求体大小
 
-  // 禁止使用 IP 或内网域名 + DNS 解析落到内网
+  // 规范化并编码 target，确保不会因未转义字符报错
+  let normalizedTarget: string;
+  let parsedUrl: URL;
   try {
-    const u = new URL(target);
-    if (isForbiddenHost(u.hostname)) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error: "Forbidden",
-          message: "Target host is not allowed",
-        })
-      );
-      return;
+    parsedUrl = new URL(target);
+    normalizedTarget = parsedUrl.toString();
+  } catch (e: any) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: "Invalid target URL",
+        message: e?.message || String(e),
+      })
+    );
+    return;
+  }
+
+  // 禁止使用 IP 或内网域名 + DNS 解析落到内网
+  if (isForbiddenHost(parsedUrl.hostname)) {
+    res.writeHead(403, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: "Forbidden",
+        message: "Target host is not allowed",
+      })
+    );
+    return;
+  }
+  if (await resolvesToPrivateAddress(parsedUrl.hostname)) {
+    res.writeHead(403, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: "Forbidden",
+        message: "Target host resolves to private address",
+      })
+    );
+    return;
+  }
+
+  try {
+    proxy.web(req, res, { target: normalizedTarget, ignorePath: true });
+  } catch (err: any) {
+    if (!res.headersSent) {
+      res.writeHead(400, { "Content-Type": "application/json" });
     }
-    if (await resolvesToPrivateAddress(u.hostname)) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error: "Forbidden",
-          message: "Target host resolves to private address",
-        })
-      );
-      return;
-    }
-  } catch {}
-  proxy.web(req, res, { target, ignorePath: true });
+    res.end(
+      JSON.stringify({
+        error: "Proxy error",
+        message: err?.message || String(err),
+      })
+    );
+  }
 }
 
 async function handleWsUpgrade(
@@ -210,21 +238,39 @@ async function handleWsUpgrade(
     socket.destroy();
     return;
   }
-  // 禁止使用 IP 或内网域名（WS）
+  // 规范化并编码 target
+  let normalizedTarget: string;
+  let parsedUrl: URL;
   try {
-    const u = new URL(target);
-    if (isForbiddenHost(u.hostname)) {
-      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    parsedUrl = new URL(target);
+    normalizedTarget = parsedUrl.toString();
+  } catch {
+    socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
+  // 禁止使用 IP 或内网域名（WS）
+  if (isForbiddenHost(parsedUrl.hostname)) {
+    socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  if (await resolvesToPrivateAddress(parsedUrl.hostname)) {
+    socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
+  try {
+    proxy.ws(req, socket, head, { target: normalizedTarget, ignorePath: true });
+  } catch {
+    try {
+      socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+    } finally {
       socket.destroy();
-      return;
     }
-    if (await resolvesToPrivateAddress(u.hostname)) {
-      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-  } catch {}
-  proxy.ws(req, socket, head, { target, ignorePath: true });
+  }
 }
 
 function createHttpServers() {
