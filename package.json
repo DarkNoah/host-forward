@@ -19,7 +19,8 @@
   },
   "dependencies": {
     "dotenv": "^16.4.5",
-    "http-proxy": "^1.18.1"
+    "http-proxy": "^1.18.1",
+    "proxy-agent": "^6.4.0"
   },
   "devDependencies": {
     "@types/http-proxy": "^1.17.14",

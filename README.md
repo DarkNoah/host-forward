@@ -37,8 +37,19 @@ npx wscat -c ws://localhost:8080/wss://echo.websocket.events
 - `HTTPS_PORT`：启用则额外监听 HTTPS 端口
 - `HTTPS_KEY_PATH`/`HTTPS_CERT_PATH`/`HTTPS_CA_PATH`：HTTPS 证书文件路径
 - `PROXY_REJECT_UNAUTHORIZED`：是否严格校验证书（默认 false，目标为自签名证书时可置为 false）
+ - `http_proxy`/`https_proxy`：上游代理地址（例如 `http://127.0.0.1:7890`）。当设置时，服务转发到目标地址会通过该上游代理。
+ - `no_proxy`：以逗号分隔的不走代理的主机列表（如 `localhost,127.0.0.1`）。
 
 > 提示：`.env` 文件示例可参考上述变量名，放在项目根目录即可被加载。
+
+示例（.env 或 PM2 env）：
+```bash
+HTTP_PORT=8080
+# 可选：上游代理
+http_proxy=http://127.0.0.1:7890
+https_proxy=http://127.0.0.1:7890
+no_proxy=localhost,127.0.0.1
+```
 
 ## 注意
 - 仅当路径以完整的 `http://`/`https://`/`ws://`/`wss://` URL 开头时进行转发；否则返回 400。

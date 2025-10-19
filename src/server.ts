@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import httpProxy from "http-proxy";
 import dns from "node:dns/promises";
 import net from "node:net";
+import { ProxyAgent } from "proxy-agent";
 
 dotenv.config();
 
@@ -36,6 +37,21 @@ const proxy = httpProxy.createProxyServer({
   changeOrigin: true,
   secure: STRICT_SSL,
 });
+
+// 上游代理（支持 http_proxy/https_proxy/no_proxy），仅当环境变量存在时启用
+const upstreamProxyAgent: any = (() => {
+  const hasProxy =
+    process.env.http_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTPS_PROXY;
+  if (!hasProxy) return undefined;
+  try {
+    return new ProxyAgent();
+  } catch {
+    return undefined;
+  }
+})();
 
 proxy.on("error", (err, req, res) => {
   // res 可能是 ServerResponse 或 Socket（WS 场景），需先做类型收窄
@@ -213,7 +229,11 @@ async function handleHttpRequest(
   }
 
   try {
-    proxy.web(req, res, { target: normalizedTarget, ignorePath: true });
+    proxy.web(req, res, {
+      target: normalizedTarget,
+      ignorePath: true,
+      agent: upstreamProxyAgent,
+    });
   } catch (err: any) {
     if (!res.headersSent) {
       res.writeHead(400, { "Content-Type": "application/json" });
@@ -263,7 +283,11 @@ async function handleWsUpgrade(
   }
 
   try {
-    proxy.ws(req, socket, head, { target: normalizedTarget, ignorePath: true });
+    proxy.ws(req, socket, head, {
+      target: normalizedTarget,
+      ignorePath: true,
+      agent: upstreamProxyAgent,
+    });
   } catch {
     try {
       socket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
